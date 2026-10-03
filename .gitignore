@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.local
+
+# model files (downloaded separately, not committed)
+public/models/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CLAUDE
+CLAUDE.md

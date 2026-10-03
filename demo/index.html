@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Biocheck SDK — Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #eee; display: flex; flex-direction: column; align-items: center; gap: 1.5rem; padding: 2rem; min-height: 100vh; }
+    h1 { font-size: 1.4rem; font-weight: 600; }
+    .row { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+    .panel { display: flex; flex-direction: column; gap: 0.75rem; }
+    label { font-size: 0.85rem; color: #999; }
+    video, canvas { border-radius: 8px; background: #1a1a1a; width: 320px; height: 240px; object-fit: cover; }
+    button { padding: 0.6rem 1.4rem; border: none; border-radius: 6px; font-size: 0.95rem; cursor: pointer; background: #2563eb; color: #fff; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #log { font-size: 0.85rem; color: #aaa; max-width: 680px; text-align: center; min-height: 2rem; }
+    #result { font-size: 1.3rem; font-weight: 700; }
+    .accepted { color: #22c55e; }
+    .rejected { color: #ef4444; }
+    input[type="file"] { color: #ccc; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Biocheck SDK — Demo</h1>
+  <div class="row">
+    <div class="panel">
+      <label>Cámara (selfie)</label>
+      <video id="video" autoplay playsinline muted></video>
+    </div>
+    <div class="panel">
+      <label>Documento de identidad</label>
+      <canvas id="docCanvas"></canvas>
+      <input type="file" id="docInput" accept="image/*" />
+    </div>
+  </div>
+  <div style="display:flex;gap:1rem;">
+    <button id="startCamera">Iniciar cámara</button>
+    <button id="verifyBtn" disabled>Verificar identidad</button>
+  </div>
+  <div id="log">Iniciá la cámara y cargá el documento para comenzar.</div>
+  <div id="result"></div>
+
+  <script type="module">
+    import { verify, openCameraStream, closeCamera } from "../src/index.ts";
+
+    const video = document.getElementById("video");
+    const docCanvas = document.getElementById("docCanvas");
+    const docInput = document.getElementById("docInput");
+    const startCameraBtn = document.getElementById("startCamera");
+    const verifyBtn = document.getElementById("verifyBtn");
+    const logEl = document.getElementById("log");
+    const resultEl = document.getElementById("result");
+
+    let stream = null;
+    let docBitmap = null;
+
+    function log(msg) { logEl.textContent = msg; }
+
+    startCameraBtn.addEventListener("click", async () => {
+      try {
+        log("Solicitando acceso a la cámara…");
+        const result = await openCameraStream();
+        stream = result.stream;
+        video.srcObject = stream;
+        startCameraBtn.disabled = true;
+        log("Cámara activa. Cargá el documento.");
+        checkReady();
+      } catch (e) {
+        log(`Error al acceder a la cámara: ${e.message}`);
+      }
+    });
+
+    docInput.addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const bitmap = await createImageBitmap(file);
+      docBitmap = bitmap;
+      const ctx = docCanvas.getContext("2d");
+      docCanvas.width = bitmap.width;
+      docCanvas.height = bitmap.height;
+      ctx.drawImage(bitmap, 0, 0, docCanvas.width, docCanvas.height);
+      checkReady();
+    });
+
+    function checkReady() {
+      verifyBtn.disabled = !(stream && docBitmap);
+    }
+
+    const stepLabels = {
+      initializing: "Cargando modelos…",
+      liveness_challenge: "Desafío de presencia de vida…",
+      capturing_document: "Procesando documento…",
+      ocr: "Leyendo MRZ…",
+      extracting_document_photo: "Extrayendo foto del documento…",
+      biometric_comparison: "Comparando rostros…",
+      done: "Listo.",
+    };
+
+    verifyBtn.addEventListener("click", async () => {
+      verifyBtn.disabled = true;
+      resultEl.textContent = "";
+      resultEl.className = "";
+
+      try {
+        const result = await verify(
+          video,
+          docBitmap,
+          { modelsBaseUrl: "/models" },
+          (step) => log(stepLabels[step] ?? step)
+        );
+
+        if (result.accepted) {
+          resultEl.textContent = `Verificado ✓ (score: ${result.score?.toFixed(3)})`;
+          resultEl.className = "accepted";
+        } else {
+          const where = result.rejectedAt ?? "comparación";
+          resultEl.textContent = `Rechazado ✗ (etapa: ${where}${result.score != null ? `, score: ${result.score.toFixed(3)}` : ""})`;
+          resultEl.className = "rejected";
+        }
+      } catch (e) {
+        log(`Error: ${e.message}`);
+      } finally {
+        verifyBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
