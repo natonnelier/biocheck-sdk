@@ -2,6 +2,11 @@ import { defineConfig } from "vite";
 import wasm from "vite-plugin-wasm";
 import { resolve } from "path";
 
+const COOP_COEP_HEADERS = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "require-corp",
+};
+
 export default defineConfig({
   plugins: [wasm()],
   build: {
@@ -11,7 +16,6 @@ export default defineConfig({
       fileName: "biocheck-sdk",
     },
     rollupOptions: {
-      // externalize deps that clients will provide
       external: [],
     },
     target: "es2022",
@@ -22,7 +26,13 @@ export default defineConfig({
   worker: {
     format: "es",
   },
-  // demo dev server
   root: ".",
   publicDir: "public",
+  server: {
+    open: "/demo/",
+    headers: COOP_COEP_HEADERS,
+  },
+  preview: {
+    headers: COOP_COEP_HEADERS,
+  },
 });
