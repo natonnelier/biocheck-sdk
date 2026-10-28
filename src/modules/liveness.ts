@@ -1,7 +1,6 @@
 import * as ort from "onnxruntime-web";
-import type { FaceLandmarkerResult } from "@mediapipe/tasks-vision";
 import { LIVENESS, MINIFAS } from "../config.js";
-import type { LivenessChallenge } from "../types.js";
+import type { LivenessChallenge, FaceDetectionResult } from "../types.js";
 
 // Blendshape indices for eye blink (MediaPipe 52-blendshape model)
 const BLINK_LEFT_INDEX = 9;   // eyeBlinkLeft
@@ -16,28 +15,26 @@ export async function initPassiveLiveness(modelsBaseUrl: string): Promise<void> 
   );
 }
 
-/** Returns true if the landmark result indicates a blink. */
-export function detectBlink(result: FaceLandmarkerResult): boolean {
-  const blendshapes = result.faceBlendshapes?.[0]?.categories;
-  if (!blendshapes) return false;
-  const left = blendshapes[BLINK_LEFT_INDEX]?.score ?? 0;
-  const right = blendshapes[BLINK_RIGHT_INDEX]?.score ?? 0;
+/** Returns true if the serialized detection result indicates a blink. */
+export function detectBlink(result: FaceDetectionResult): boolean {
+  const left = result.blendshapeScores[BLINK_LEFT_INDEX] ?? 0;
+  const right = result.blendshapeScores[BLINK_RIGHT_INDEX] ?? 0;
   return left > LIVENESS.EAR_CLOSED && right > LIVENESS.EAR_CLOSED;
 }
 
-/** Returns yaw angle in degrees from the facial transformation matrix. */
-export function getYawDegrees(result: FaceLandmarkerResult): number {
-  const matrix = result.facialTransformationMatrixes?.[0]?.data;
-  if (!matrix) return 0;
+/** Returns yaw angle in degrees from the serialized transformation matrix. */
+export function getYawDegrees(result: FaceDetectionResult): number {
+  const matrix = result.transformMatrix;
+  if (!matrix.length) return 0;
   // Row-major 4×4 matrix: yaw extracted from rotation submatrix
   const sinYaw = -matrix[8];
   return (Math.asin(Math.min(1, Math.max(-1, sinYaw))) * 180) / Math.PI;
 }
 
 /** Returns normalized face width (relative to frame width) from landmarks. */
-export function getRelativeFaceWidth(result: FaceLandmarkerResult): number {
-  const lms = result.faceLandmarks?.[0];
-  if (!lms) return 0;
+export function getRelativeFaceWidth(result: FaceDetectionResult): number {
+  const lms = result.landmarks;
+  if (!lms.length) return 0;
   const xs = lms.map((p) => p.x);
   return Math.max(...xs) - Math.min(...xs);
 }

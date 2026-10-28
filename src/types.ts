@@ -52,3 +52,18 @@ export type ProgressStep =
   | "done";
 
 export type ProgressCallback = (step: ProgressStep) => void;
+
+/**
+ * Serializable summary of a face detection frame result.
+ * Extracted from FaceLandmarkerResult inside the vision worker so that plain
+ * data (no WASM-heap references) is sent across the worker boundary.
+ */
+export interface FaceDetectionResult {
+  hasFace: boolean;
+  /** 478 normalized landmarks (x, y, z in [0,1]). */
+  landmarks: Array<{ x: number; y: number; z: number }>;
+  /** 52 blendshape scores indexed by MediaPipe category index. */
+  blendshapeScores: number[];
+  /** Flat row-major 4×4 facial-transformation matrix (16 elements). */
+  transformMatrix: number[];
+}

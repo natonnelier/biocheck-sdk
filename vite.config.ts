@@ -24,7 +24,9 @@ export default defineConfig({
     exclude: ["onnxruntime-web"],
   },
   worker: {
-    format: "es",
+    // Classic (IIFE) workers: MediaPipe's WASM wrapper may call importScripts
+    // which is unavailable in ES module workers.
+    format: "iife",
   },
   root: ".",
   publicDir: "public",

@@ -26,15 +26,16 @@ export async function initFaceLandmarker(modelsBaseUrl: string): Promise<void> {
 }
 
 /**
- * Runs face landmarking on a single video frame.
+ * Runs face landmarking on a single frame.
+ * Accepts a video element (main thread) or an ImageBitmap (worker).
  * Must call initFaceLandmarker() first.
  */
 export function detectFace(
-  video: HTMLVideoElement,
+  image: HTMLVideoElement | ImageBitmap,
   timestampMs: number
 ): FaceLandmarkerResult {
   if (!landmarker) throw new Error("FaceLandmarker not initialized");
-  return landmarker.detectForVideo(video, timestampMs);
+  return landmarker.detectForVideo(image, timestampMs);
 }
 
 /**

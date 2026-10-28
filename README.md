@@ -92,6 +92,17 @@ The SDK loads model files at runtime from `modelsBaseUrl`. Place them in `public
 | `mediapipe/wasm/*` | MediaPipe WASM assets |
 | `tesseract/*` | Tesseract.js worker + WASM |
 
+## Architecture
+
+All model inference runs inside dedicated Web Workers, keeping the main thread free for UI rendering:
+
+| Worker | Models |
+|---|---|
+| Vision Worker (classic) | MediaPipe Face Landmarker, SFace INT8, MiniFASNetV2 |
+| OCR Worker (classic) | Tesseract.js (which in turn spawns its own internal worker) |
+
+Classic workers are required because MediaPipe's WASM wrapper calls `importScripts`, which is unavailable in ES module workers.
+
 ## Dependencies
 
 | Library | Purpose |
@@ -101,17 +112,20 @@ The SDK loads model files at runtime from `modelsBaseUrl`. Place them in `public
 | `tesseract.js` | MRZ OCR |
 | `mrz` | MRZ parsing and checksum validation |
 
-Inference uses the WebAssembly backend by default. SIMD and multithreading are enabled automatically when the page is served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers.
+Inference uses the WebAssembly backend by default. SIMD and multithreading are enabled automatically when the page is served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers (set automatically by the Vite dev server).
 
 ## Development
 
 ```bash
 npm install
-npm run dev        # Vite dev server at http://localhost:5173
-npm test           # Vitest unit tests
-npm run typecheck  # TypeScript check
-npm run build      # produces dist/
+npm run download-models   # download model files into public/models/
+npm run dev               # Vite dev server → opens http://localhost:5173/demo/
+npm test                  # Vitest unit tests
+npm run typecheck         # TypeScript check
+npm run build             # produces dist/
 ```
+
+> **Note:** `minifasnetv2.onnx` requires a manual PyTorch→ONNX export step. See `scripts/download-models.sh` for instructions.
 
 ## Privacy
 
