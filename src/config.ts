@@ -1,63 +1,117 @@
-import type { BiocheckConfig } from "./types.js";
+import { BiocheckError } from "./errors.js";
+import type { BiocheckConfig, ResolvedConfig } from "./types.js";
 
-export const DEFAULT_CONFIG: Required<BiocheckConfig> = {
-  threshold: 0.363,
+/** Initial design values of table 3.6. */
+export const DEFAULT_CONFIG: ResolvedConfig = {
   modelsBaseUrl: "/models",
-  livenessChallengCount: 3,
-  livenessChallengeDuration: 5,
-  livenessPassiveThreshold: 0.5,
+  camera: { minWidth: 640, minHeight: 480, minFrameRate: 15 },
+  detection: { minConfidence: 0.8, minFaceWidthRatio: 0.25 },
+  liveness: {
+    challengeCount: 3,
+    timeoutSeconds: 5,
+    blinkClosedThreshold: 0.5,
+    blinkOpenThreshold: 0.3,
+    blinkClosedFrames: 2,
+    turnDegrees: 20,
+    returnDegrees: 10,
+    widthIncrease: 0.3,
+    perspectiveIncrease: 0.05,
+    passiveFrames: 3,
+    passiveThreshold: 0.5,
+  },
+  document: {
+    mrzCharHeightMin: 30,
+    mrzCharHeightMax: 40,
+    photoMinWidth: 112,
+    maxCaptures: 3,
+  },
+  comparison: { maxAngleDegrees: 15 },
+  decision: { threshold: 0.363 },
 };
 
-/** Liveness active challenge thresholds */
-export const LIVENESS = {
-  /** EAR below this → eye considered closed */
-  EAR_CLOSED: 0.3,
-  /** EAR above this → eye considered open */
-  EAR_OPEN: 0.5,
-  /** Yaw angle (degrees) to trigger head turn */
-  HEAD_TURN_DEGREES: 20,
-  /** Yaw angle (degrees) to consider head returned */
-  HEAD_RETURN_DEGREES: 10,
-  /** Relative face width increase to detect "move closer" */
-  MOVE_CLOSER_RATIO: 1.3,
-  /** Nose/face perspective ratio increase (move closer challenge) */
-  PERSPECTIVE_RATIO_INCREASE: 0.05,
+/** Merges caller overrides into the defaults and validates the result. */
+export function resolveConfig(overrides: BiocheckConfig = {}): ResolvedConfig {
+  const cfg: ResolvedConfig = {
+    modelsBaseUrl: (overrides.modelsBaseUrl ?? DEFAULT_CONFIG.modelsBaseUrl).replace(/\/$/, ""),
+    camera: { ...DEFAULT_CONFIG.camera, ...overrides.camera },
+    detection: { ...DEFAULT_CONFIG.detection, ...overrides.detection },
+    liveness: { ...DEFAULT_CONFIG.liveness, ...overrides.liveness },
+    document: { ...DEFAULT_CONFIG.document, ...overrides.document },
+    comparison: { ...DEFAULT_CONFIG.comparison, ...overrides.comparison },
+    decision: { ...DEFAULT_CONFIG.decision, ...overrides.decision },
+  };
+  const l = cfg.liveness;
+  const d = cfg.document;
+  const problems = [
+    !(Number.isInteger(l.challengeCount) && l.challengeCount >= 1 && l.challengeCount <= 3) &&
+      "liveness.challengeCount must be an integer in 1–3",
+    !(Number.isInteger(l.passiveFrames) && l.passiveFrames >= 1) &&
+      "liveness.passiveFrames must be a positive integer",
+    !(Number.isInteger(l.blinkClosedFrames) && l.blinkClosedFrames >= 1) &&
+      "liveness.blinkClosedFrames must be a positive integer",
+    !(l.blinkOpenThreshold < l.blinkClosedThreshold) &&
+      "liveness.blinkOpenThreshold must be below blinkClosedThreshold",
+    !(l.returnDegrees < l.turnDegrees) && "liveness.returnDegrees must be below turnDegrees",
+    !(Number.isInteger(d.maxCaptures) && d.maxCaptures >= 1) &&
+      "document.maxCaptures must be a positive integer",
+    !(d.mrzCharHeightMin > 0 && d.mrzCharHeightMin <= d.mrzCharHeightMax) &&
+      "document.mrzCharHeightMin must be positive and ≤ mrzCharHeightMax",
+  ].filter((p): p is string => typeof p === "string");
+  if (problems.length) throw new BiocheckError("invalid_config", problems.join("; "));
+  return cfg;
+}
+
+// ── Fixed constants (not calibratable) ─────────────────────────────────────
+
+/** Logical model/runtime file ids, resolved through manifest.json. */
+export const MODEL_IDS = {
+  faceLandmarker: "face_landmarker",
+  sface: "sface",
+  minifasnet: "minifasnetv2",
+  ocrb: "ocrb",
+  mediapipeLoader: "mediapipe_wasm_loader",
+  mediapipeBinary: "mediapipe_wasm_binary",
+  ortGlue: "ort_wasm_glue",
+  ortBinary: "ort_wasm_binary",
+  tesseractWorker: "tesseract_worker",
+  tesseractCore: "tesseract_core",
 } as const;
 
-/** SFace model details */
+export type ModelId = (typeof MODEL_IDS)[keyof typeof MODEL_IDS];
+
 export const SFACE = {
-  EMBEDDING_DIM: 128,
   INPUT_SIZE: 112,
-  MODEL_FILE: "sface_int8.onnx",
 } as const;
 
-/** MiniFASNetV2 model details */
 export const MINIFAS = {
-  MODEL_FILE: "minifasnetv2.onnx",
-  /** Index of the "real face" class in softmax output */
+  INPUT_SIZE: 80,
+  /** Crop scale, from the weight-file prefix `2.7_80x80_MiniFASNetV2`. */
+  CROP_SCALE: 2.7,
+  /** Class 0 = spoof (print), 1 = real, 2 = spoof (replay); per Minivision test.py. */
   REAL_CLASS_INDEX: 1,
-  FRAMES_TO_ANALYZE: 3,
 } as const;
 
-/** Face Landmarker model */
 export const FACE_LANDMARKER = {
-  MODEL_FILE: "face_landmarker.task",
-  NUM_FACES: 1,
-  MIN_DETECTION_CONFIDENCE: 0.5,
-  MIN_TRACKING_CONFIDENCE: 0.5,
+  /** ≥ 2 so that a second face in a selfie frame can be detected and rejected. */
+  VIDEO_NUM_FACES: 2,
+  /** Polycarbonate DNI: main photo + ghost image + laser image. */
+  IMAGE_NUM_FACES: 3,
 } as const;
 
-/** Tesseract OCR */
-export const OCR = {
-  MODEL_FILE: "ocrb_int.traineddata",
-  WHITELIST: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
-  MAX_RETRIES: 3,
+/** The MRZ uses only these characters (ICAO 9303). */
+export const MRZ_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
+
+/**
+ * Physical layout used to crop the MRZ strip and estimate the character
+ * height from it. Heights in millimetres (ICAO 9303 parts 4 and 5).
+ *  - DNI: ID-1 card, 85.6 × 54 mm, TD1 (3 × 30).
+ *  - Passport: TD3 data page, 125 × 88 mm, TD3 (2 × 44).
+ * `stripMm` is the bottom band cropped; it holds the MRZ plus framing slack.
+ */
+export const DOCUMENT_LAYOUT = {
+  dni: { aspect: 85.6 / 54, heightMm: 54, stripMm: 19, lines: 3, lineLength: 30 },
+  passport: { aspect: 125 / 88, heightMm: 88, stripMm: 20, lines: 2, lineLength: 44 },
 } as const;
 
-/** Document photo extraction */
-export const DOCUMENT_PHOTO = {
-  /** Minimum face width in pixels after extraction */
-  MIN_FACE_WIDTH_PX: 112,
-  /** Output size for aligned face crop */
-  ALIGNED_SIZE: 112,
-} as const;
+/** OCR-B size 1 character height (ICAO 9303-3), in millimetres. */
+export const MRZ_CHAR_HEIGHT_MM = 2.4;

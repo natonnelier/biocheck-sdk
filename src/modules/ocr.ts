@@ -1,157 +1,102 @@
-import { createWorker, PSM, type Worker as TesseractWorker } from "tesseract.js";
-import { parse as parseMRZ } from "mrz";
-import { OCR } from "../config.js";
-import type { MRZData } from "../types.js";
+import { createWorker, OEM, PSM, type Worker as TesseractWorker } from "tesseract.js";
+import { MRZ_WHITELIST } from "../config.js";
+import { BiocheckError } from "../errors.js";
+import type { DocumentType, ResolvedConfig } from "../types.js";
+import { otsuThreshold, parseMrz, stripGeometry, toGray } from "./mrz.js";
 
-let ocrWorker: TesseractWorker | null = null;
-
-export async function initOCR(modelsBaseUrl: string): Promise<void> {
-  ocrWorker = await createWorker("ocrb_int", 1, {
-    workerPath: `${modelsBaseUrl}/tesseract/worker.min.js`,
-    langPath: `${modelsBaseUrl}/tesseract/lang-data`,
-    corePath: `${modelsBaseUrl}/tesseract/tesseract-core.wasm.js`,
-  });
-
-  await ocrWorker.setParameters({
-    tessedit_char_whitelist: OCR.WHITELIST,
-    tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-  });
+export interface OcrUrls {
+  worker: string;
+  core: string;
+  /** URL of `<lang>.traineddata`. */
+  lang: string;
 }
 
 /**
- * Extracts MRZ lines from the bottom strip of a document image.
- * Returns null if extraction fails or the MRZ is invalid.
+ * MRZ reader on the main thread. Tesseract.js runs in its own worker; the
+ * cheap crop/grayscale/resize/Otsu steps run here (thesis 3.3.3).
  */
-export async function extractMRZ(
-  documentImage: ImageBitmap | HTMLCanvasElement
-): Promise<MRZData | null> {
-  if (!ocrWorker) throw new Error("OCR worker not initialized");
+export class MrzReader {
+  private constructor(
+    private readonly worker: TesseractWorker,
+    private readonly doc: ResolvedConfig["document"]
+  ) {}
 
-  const bitmap =
-    documentImage instanceof ImageBitmap
-      ? documentImage
-      : await createImageBitmap(documentImage);
-  const strip = await cropMRZStrip(bitmap);
-
-  // Tesseract.js accepts OffscreenCanvas via blob conversion
-  const blob = await (strip as unknown as OffscreenCanvas).convertToBlob();
-  for (let attempt = 0; attempt < OCR.MAX_RETRIES; attempt++) {
-    const { data } = await ocrWorker.recognize(blob);
-    const lines = data.text
-      .split("\n")
-      .map((l) => l.trim().replace(/\s/g, ""))
-      .filter((l) => l.length > 0);
-
-    const mrzResult = tryParseMRZ(lines);
-    if (mrzResult) return mrzResult;
-  }
-
-  return null;
-}
-
-/** Crops the lower ~15% of the document image, converts to grayscale, applies threshold. */
-async function cropMRZStrip(source: ImageBitmap): Promise<OffscreenCanvas> {
-  const { width, height } = source;
-  const stripHeight = Math.round(height * 0.15);
-  const y = height - stripHeight;
-
-  const canvas = new OffscreenCanvas(width, stripHeight);
-  const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(source, 0, y, width, stripHeight, 0, 0, width, stripHeight);
-
-  // Grayscale + scale up for better OCR
-  const imageData = ctx.getImageData(0, 0, width, stripHeight);
-  applyGrayscaleOtsu(imageData);
-  ctx.putImageData(imageData, 0, 0);
-
-  // Scale up 2× for Tesseract accuracy
-  const scaled = new OffscreenCanvas(width * 2, stripHeight * 2);
-  const scaledCtx = scaled.getContext("2d")!;
-  scaledCtx.imageSmoothingEnabled = false;
-  scaledCtx.drawImage(canvas, 0, 0, width * 2, stripHeight * 2);
-
-  return scaled;
-}
-
-/** In-place grayscale + Otsu binarization. */
-function applyGrayscaleOtsu(imageData: ImageData): void {
-  const d = imageData.data;
-  const histogram = new Array(256).fill(0);
-
-  for (let i = 0; i < d.length; i += 4) {
-    const gray = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-    d[i] = d[i + 1] = d[i + 2] = gray;
-    histogram[gray]++;
-  }
-
-  const threshold = otsuThreshold(histogram, d.length / 4);
-
-  for (let i = 0; i < d.length; i += 4) {
-    const v = d[i] > threshold ? 255 : 0;
-    d[i] = d[i + 1] = d[i + 2] = v;
-  }
-}
-
-function otsuThreshold(histogram: number[], total: number): number {
-  let sum = 0;
-  for (let i = 0; i < 256; i++) sum += i * histogram[i];
-
-  let sumB = 0;
-  let wB = 0;
-  let max = 0;
-  let threshold = 0;
-
-  for (let i = 0; i < 256; i++) {
-    wB += histogram[i];
-    if (wB === 0) continue;
-    const wF = total - wB;
-    if (wF === 0) break;
-
-    sumB += i * histogram[i];
-    const mB = sumB / wB;
-    const mF = (sum - sumB) / wF;
-    const between = wB * wF * (mB - mF) ** 2;
-
-    if (between > max) {
-      max = between;
-      threshold = i;
+  static async create(urls: OcrUrls, doc: ResolvedConfig["document"]): Promise<MrzReader> {
+    const slash = urls.lang.lastIndexOf("/");
+    const langPath = urls.lang.slice(0, slash);
+    const lang = urls.lang.slice(slash + 1).replace(/\.traineddata$/, "");
+    try {
+      const worker = await createWorker(lang, OEM.LSTM_ONLY, {
+        workerPath: urls.worker,
+        corePath: urls.core,
+        langPath,
+        gzip: false,
+        // Default would persist the traineddata in IndexedDB; the SDK
+        // persists nothing (out of scope: any storage).
+        cacheMethod: "none",
+        workerBlobURL: false,
+      });
+      await worker.setParameters({
+        tessedit_char_whitelist: MRZ_WHITELIST,
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      });
+      return new MrzReader(worker, doc);
+    } catch (e) {
+      throw new BiocheckError("model_load_failed", `Tesseract.js: ${String(e)}`);
     }
   }
-  return threshold;
-}
 
-function tryParseMRZ(lines: string[]): MRZData | null {
-  try {
-    // TD1 format: 3 lines of 30 chars (Argentine DNI)
-    if (lines.length >= 3 && lines[0].length >= 30) {
-      const result = parseMRZ([lines[0], lines[1], lines[2]]);
-      if (result.valid) return formatMRZ(result);
-    }
-    // TD3 format: 2 lines of 44 chars (passport)
-    if (lines.length >= 2 && lines[0].length >= 44) {
-      const result = parseMRZ([lines[0], lines[1]]);
-      if (result.valid) return formatMRZ(result);
-    }
-    return null;
-  } catch {
-    return null;
+  /** True when the image yields an MRZ of the right format with valid check digits. */
+  async read(image: ImageBitmap, docType: DocumentType): Promise<boolean> {
+    const canvas = preprocessStrip(image, docType, this.doc);
+    const { data } = await this.worker.recognize(canvas);
+    // Only validity leaves this function; the parsed fields are dropped here.
+    return parseMrz(data.text, docType) !== null;
+  }
+
+  async terminate(): Promise<void> {
+    await this.worker.terminate();
   }
 }
 
-function formatMRZ(parsed: ReturnType<typeof parseMRZ>): MRZData {
-  return {
-    surname: parsed.fields.lastName ?? "",
-    firstName: parsed.fields.firstName ?? "",
-    documentNumber: parsed.fields.documentNumber ?? "",
-    birthDate: parsed.fields.birthDate ?? "",
-    nationality: parsed.fields.nationality ?? "",
-    sex: parsed.fields.sex ?? "",
-    expirationDate: parsed.fields.expirationDate ?? "",
-    valid: parsed.valid,
-  };
+/** Bottom strip → grayscale → smooth resize to the target char height → Otsu. */
+function preprocessStrip(
+  image: ImageBitmap,
+  docType: DocumentType,
+  doc: ResolvedConfig["document"]
+): HTMLCanvasElement {
+  const g = stripGeometry(image.height, docType, doc);
+  const w = image.width;
+
+  const strip = document.createElement("canvas");
+  strip.width = w;
+  strip.height = g.sh;
+  const sctx = strip.getContext("2d", { willReadFrequently: true })!;
+  sctx.drawImage(image, 0, g.sy, w, g.sh, 0, 0, w, g.sh);
+  const src = sctx.getImageData(0, 0, w, g.sh);
+  writeGray(src.data, toGray(src.data));
+  sctx.putImageData(src, 0, 0);
+
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.round(w * g.scale));
+  out.height = Math.max(1, Math.round(g.sh * g.scale));
+  const octx = out.getContext("2d", { willReadFrequently: true })!;
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = "high";
+  octx.drawImage(strip, 0, 0, out.width, out.height);
+
+  const scaled = octx.getImageData(0, 0, out.width, out.height);
+  const gray = toGray(scaled.data);
+  const t = otsuThreshold(gray);
+  for (let i = 0; i < gray.length; i++) gray[i] = gray[i] > t ? 255 : 0;
+  writeGray(scaled.data, gray);
+  octx.putImageData(scaled, 0, 0);
+  return out;
 }
 
-export async function disposeOCR(): Promise<void> {
-  await ocrWorker?.terminate();
-  ocrWorker = null;
+function writeGray(rgba: Uint8ClampedArray, gray: Uint8Array): void {
+  for (let i = 0, j = 0; j < gray.length; i += 4, j++) {
+    rgba[i] = rgba[i + 1] = rgba[i + 2] = gray[j];
+    rgba[i + 3] = 255;
+  }
 }

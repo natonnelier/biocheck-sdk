@@ -8,12 +8,14 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/biocheck-sdk.js",
-      "require": "./dist/biocheck-sdk.umd.cjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/biocheck-sdk.umd.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -21,7 +23,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "download-models": "bash scripts/download-models.sh"
+    "download-models": "bash scripts/download-models.sh",
+    "models:check": "node scripts/models-manifest.mjs --check",
+    "models:pin": "node scripts/models-manifest.mjs --write"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",

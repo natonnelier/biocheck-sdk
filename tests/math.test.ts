@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cosineSimilarity, eyeAspectRatio } from "../src/utils/math.js";
+import { cosineSimilarity, secureRandomInt, shuffle } from "../src/utils/math.js";
 
 describe("cosineSimilarity", () => {
   it("returns 1 for identical vectors", () => {
@@ -25,12 +25,33 @@ describe("cosineSimilarity", () => {
   });
 });
 
-describe("eyeAspectRatio", () => {
-  it("returns ~0 for fully closed eye (flat points)", () => {
-    const pts = [
-      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 },
-      { x: 3, y: 0 }, { x: 2, y: 0 }, { x: 1, y: 0 },
-    ];
-    expect(eyeAspectRatio(pts)).toBeCloseTo(0);
+describe("secureRandomInt", () => {
+  it("stays in range", () => {
+    for (let i = 0; i < 1000; i++) {
+      const r = secureRandomInt(3);
+      expect(r).toBeGreaterThanOrEqual(0);
+      expect(r).toBeLessThan(3);
+    }
+  });
+});
+
+describe("shuffle (Fisher–Yates)", () => {
+  it("is a permutation and does not mutate the input", () => {
+    const input = ["a", "b", "c"];
+    const out = shuffle(input);
+    expect(out.slice().sort()).toEqual(["a", "b", "c"]);
+    expect(input).toEqual(["a", "b", "c"]);
+  });
+
+  it("produces all 6 orders of 3 items with roughly equal frequency", () => {
+    const counts = new Map<string, number>();
+    const n = 60_000;
+    for (let i = 0; i < n; i++) {
+      const k = shuffle([0, 1, 2]).join("");
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    expect(counts.size).toBe(6);
+    // Expected 10 000 each; sort(() => random − 0.5) is visibly biased at this n.
+    for (const c of counts.values()) expect(Math.abs(c - n / 6)).toBeLessThan(600);
   });
 });

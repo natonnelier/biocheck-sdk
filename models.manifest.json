@@ -1,0 +1,84 @@
+{
+  "files": [
+    {
+      "id": "face_landmarker",
+      "src": "face_landmarker.task",
+      "version": "float16/1",
+      "source": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "size": 3758596,
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+    },
+    {
+      "id": "sface",
+      "src": "sface_int8.onnx",
+      "version": "2021dec-int8",
+      "source": "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx",
+      "size": 9896933,
+      "sha256": "2b0e941e6f16cc048c20aee0c8e31f569118f65d702914540f7bfdc14048d78a"
+    },
+    {
+      "id": "minifasnetv2",
+      "src": "minifasnetv2.onnx",
+      "version": "2.7_80x80-opset11",
+      "source": "minivision-ai/Silent-Face-Anti-Spoofing 2.7_80x80_MiniFASNetV2.pth, exported to ONNX (scripts/download-models.sh)",
+      "size": null,
+      "sha256": null
+    },
+    {
+      "id": "ocrb",
+      "src": "tesseract/ocrb_int.traineddata",
+      "version": "tessdata_ocrb@master",
+      "source": "https://github.com/Shreeshrii/tessdata_ocrb/raw/master/ocrb_int.traineddata",
+      "size": 1453578,
+      "sha256": "814f0d862538249d4122db8d41807b08fd7c31181455df7f596a2ed5ce4434ee"
+    },
+    {
+      "id": "mediapipe_wasm_loader",
+      "src": "mediapipe/vision_wasm_module_internal.js",
+      "version": "@mediapipe/tasks-vision@0.10.35",
+      "source": "node_modules/@mediapipe/tasks-vision/wasm",
+      "size": 322082,
+      "sha256": "1f1d6215324a1fe62f6742d49a3db911170987ca18ad8c1b75f1a1c82acf2b44"
+    },
+    {
+      "id": "mediapipe_wasm_binary",
+      "src": "mediapipe/vision_wasm_module_internal.wasm",
+      "version": "@mediapipe/tasks-vision@0.10.35",
+      "source": "node_modules/@mediapipe/tasks-vision/wasm",
+      "size": 11153641,
+      "sha256": "617b8e0248dbd27e9d7ece4218004eae4cefb499196d1bb4fa0e3fef21708756"
+    },
+    {
+      "id": "ort_wasm_glue",
+      "src": "ort/ort-wasm-simd-threaded.jsep.mjs",
+      "version": "onnxruntime-web@1.30.0",
+      "source": "node_modules/onnxruntime-web/dist",
+      "size": 46851,
+      "sha256": "709853412fd1ffc34247af1e73569227b5b79629c5ca3f59cc39cf7e500e4947"
+    },
+    {
+      "id": "ort_wasm_binary",
+      "src": "ort/ort-wasm-simd-threaded.jsep.wasm",
+      "version": "onnxruntime-web@1.30.0",
+      "source": "node_modules/onnxruntime-web/dist",
+      "size": 28312028,
+      "sha256": "3ad23231b5bd6d9dda55a7f84606315e0bf35b6750c28ee993c987c54cacab0f"
+    },
+    {
+      "id": "tesseract_worker",
+      "src": "tesseract/worker.min.js",
+      "version": "tesseract.js@7.0.0",
+      "source": "node_modules/tesseract.js/dist",
+      "size": 111307,
+      "sha256": "576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d"
+    },
+    {
+      "id": "tesseract_core",
+      "src": "tesseract/tesseract-core-simd-lstm.wasm.js",
+      "version": "tesseract.js-core@7.0.0",
+      "source": "node_modules/tesseract.js-core",
+      "size": 3899472,
+      "sha256": "c58b46a4c796c0b8afccf77591d5b875b6896b45d402bbce8caa6f5362447b38"
+    }
+  ]
+}

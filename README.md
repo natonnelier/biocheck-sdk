@@ -5,131 +5,208 @@ Browser-based biometric identity verification SDK. The full pipeline runs in the
 ## Pipeline
 
 ```
-selfie video + document image
-  → liveness (active challenges + MiniFASNetV2 passive)
-  → OCR (MRZ via Tesseract.js)
-  → document photo extraction (Face Landmarker)
-  → biometric comparison (SFace INT8 + cosine similarity)
-  → { accepted: boolean, score?: number }
-```
-
-## Installation
-
-```bash
-npm install biocheck-sdk
+document phase: MRZ image → crop + gray + upscale + Otsu → Tesseract.js (OCR-B) → mrz check digits
+                photo image → Face Landmarker (IMAGE) → largest face ≥ 112 px → 5-point align → SFace embedding
+face phase:     camera frames → Face Landmarker (VIDEO) → liveness state machine (blink / turn / move closer)
+                → MiniFASNetV2 on 3 frames → most frontal frame → SFace → max(0, cos) ≥ τ
+                → { accepted: boolean, score?: number }
 ```
 
 ## Usage
 
 ```typescript
-import { verify, openCameraStream, closeCamera } from "biocheck-sdk";
+import { verify, BiocheckError } from "biocheck-sdk";
 
-// 1. Open the front camera
-const { stream, video } = await openCameraStream();
-document.body.appendChild(video);
-
-// 2. Load the document image
-const response = await fetch("/path/to/document.jpg");
-const blob = await response.blob();
-const documentImage = await createImageBitmap(blob);
-
-// 3. Run the verification pipeline
-const result = await verify(video, documentImage, {}, (step) => {
-  console.log("Progress:", step);
-});
-
-console.log(result.accepted, result.score);
-
-// 4. Clean up
-closeCamera(stream);
-```
-
-### `verify(videoElement, documentImage, config?, onProgress?)`
-
-| Parameter | Type | Description |
-|---|---|---|
-| `videoElement` | `HTMLVideoElement` | Live video stream of the user's face |
-| `documentImage` | `ImageBitmap` | Front side of the identity document |
-| `config` | `BiocheckConfig` | Optional configuration overrides |
-| `onProgress` | `(step: ProgressStep) => void` | Called at each pipeline step |
-
-Returns `Promise<VerifyResult>`:
-
-```typescript
-interface VerifyResult {
-  accepted: boolean;
-  score?: number;           // cosine similarity (0–1); present if comparison was reached
-  rejectedAt?: "liveness" | "document_ocr" | "document_photo" | "biometric_comparison";
+try {
+  const { accepted, score } = await verify(document.getElementById("kyc")!, {
+    modelsBaseUrl: "/models",
+  });
+} catch (e) {
+  if (e instanceof BiocheckError) console.error(e.code);
 }
 ```
+
+The SDK draws its own UI inside the container (camera view, document guide
+frame, capture/upload buttons, challenge prompts and hints) and opens and stops
+the camera itself.
+
+### `verify(container, config?)`
+
+Resolves with `{ accepted: boolean; score?: number }`. `score` (0–1) is present
+only when the biometric comparison was reached. Embeddings, images and
+document data are never returned.
+
+Rejects with a `BiocheckError` whose `code` is one of `browser_not_supported`,
+`camera_permission_denied`, `camera_unavailable`, `model_load_failed`,
+`invalid_config` or `internal_error`. These are failures to complete the
+verification, not decisions.
 
 ### Configuration
 
+Every parameter of thesis table 3.6, grouped by module; anything omitted takes
+its default (`DEFAULT_CONFIG`). Changing only `decision.threshold` is
+recommended — relaxing liveness parameters weakens attack resistance.
+
 ```typescript
-interface BiocheckConfig {
-  threshold?: number;                  // face match threshold (default: 0.363)
-  modelsBaseUrl?: string;              // where model files are served (default: "/models")
-  livenessChallengCount?: number;      // number of active challenges (default: 3)
-  livenessChallengeDuration?: number;  // seconds per challenge (default: 5)
-  livenessPassiveThreshold?: number;   // MiniFASNetV2 threshold (default: 0.5)
-}
+verify(container, {
+  modelsBaseUrl: "/models",
+  camera:     { minWidth: 640, minHeight: 480, minFrameRate: 15 },
+  detection:  { minConfidence: 0.8, minFaceWidthRatio: 0.25 },
+  liveness:   { challengeCount: 3, timeoutSeconds: 5,
+                blinkClosedThreshold: 0.5, blinkOpenThreshold: 0.3, blinkClosedFrames: 2,
+                turnDegrees: 20, returnDegrees: 10,
+                widthIncrease: 0.3, perspectiveIncrease: 0.05,
+                passiveFrames: 3, passiveThreshold: 0.5 },
+  document:   { mrzCharHeightMin: 30, mrzCharHeightMax: 40, photoMinWidth: 112, maxCaptures: 3 },
+  comparison: { maxAngleDegrees: 15 },
+  decision:   { threshold: 0.363 },
+});
 ```
-
-### Progress steps
-
-`"initializing"` → `"liveness_challenge"` → `"capturing_document"` → `"ocr"` → `"extracting_document_photo"` → `"biometric_comparison"` → `"done"`
 
 ## Model files
 
-The SDK loads model files at runtime from `modelsBaseUrl`. Place them in `public/models/` for local development.
+All models and WASM runtimes are served from the application's own origin —
+never from a CDN. `models.manifest.json` pins each file's version, size and
+SHA-256. The build (and the dev server) expose them as
+`<modelsBaseUrl>/<sha256[:16]>/<file>` plus a `manifest.json` that the SDK reads
+at startup, so every file can be cached as immutable.
 
-| File | Source |
-|---|---|
-| `face_landmarker.task` | [MediaPipe (Google)](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) |
-| `sface_int8.onnx` | [OpenCV Zoo (Apache 2.0)](https://github.com/opencv/opencv_zoo) |
-| `minifasnetv2.onnx` | [Minivision (Apache 2.0)](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing) |
-| `ocrb_int.traineddata` | [Tesseract OCR-B model](https://github.com/Shreeshrii/tessdata_ocrb) |
-| `mediapipe/wasm/*` | MediaPipe WASM assets |
-| `tesseract/*` | Tesseract.js worker + WASM |
+```bash
+npm run download-models   # fills public/models/ and checks the manifest
+npm run models:check      # verify size + SHA-256 of every file
+npm run models:pin        # record size + SHA-256 after an intentional update
+```
+
+`minifasnetv2.onnx` requires a manual PyTorch → ONNX export; see
+[Running locally](#running-locally), step 3.
 
 ## Architecture
 
-All model inference runs inside dedicated Web Workers, keeping the main thread free for UI rendering:
-
-| Worker | Models |
+| Context | Runs |
 |---|---|
-| Vision Worker (classic) | MediaPipe Face Landmarker, SFace INT8, MiniFASNetV2 |
-| OCR Worker (classic) | Tesseract.js (which in turn spawns its own internal worker) |
+| Main thread | UI, camera capture, orchestrator, MRZ strip preprocessing, MRZ parsing |
+| Face worker (module) | Face Landmarker, MiniFASNetV2, SFace, liveness state machine, decision |
+| Tesseract.js worker | OCR (Tesseract.js's own worker, terminated once the MRZ is valid) |
 
-Classic workers are required because MediaPipe's WASM wrapper calls `importScripts`, which is unavailable in ES module workers.
+The face worker protocol (`src/protocol.ts`) never sends images, landmarks,
+matrices or embeddings to the main thread. Terminating the worker at the end
+discards all biometric data at once.
 
-## Dependencies
+ONNX Runtime Web uses WASM + SIMD; multithreading when the page is
+cross-origin isolated (`COOP: same-origin`, `COEP: require-corp`). WebGPU is
+used only if a warm-up shows it is faster on the device. MediaPipe tries its
+GPU delegate and falls back to CPU.
 
-| Library | Purpose |
-|---|---|
-| `@mediapipe/tasks-vision` | Face detection, landmarks, blendshapes |
-| `onnxruntime-web` | SFace INT8 + MiniFASNetV2 inference |
-| `tesseract.js` | MRZ OCR |
-| `mrz` | MRZ parsing and checksum validation |
+## Running locally
 
-Inference uses the WebAssembly backend by default. SIMD and multithreading are enabled automatically when the page is served with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers (set automatically by the Vite dev server).
+### Prerequisites
 
-## Development
+- Node.js 20 or later, and npm.
+- A desktop browser released in the last couple of years (Chrome, Firefox or
+  Safari) and a webcam.
+- Python 3 with PyTorch, only for the one-time MiniFASNetV2 export (step 3).
+
+### 1. Install dependencies
 
 ```bash
 npm install
-npm run download-models   # download model files into public/models/
-npm run dev               # Vite dev server → opens http://localhost:5173/demo/
-npm test                  # Vitest unit tests
-npm run typecheck         # TypeScript check
-npm run build             # produces dist/
 ```
 
-> **Note:** `minifasnetv2.onnx` requires a manual PyTorch→ONNX export step. See `scripts/download-models.sh` for instructions.
+### 2. Download the models and runtimes
+
+```bash
+npm run download-models
+```
+
+This fills `public/models/` (about 60 MB, not committed). It downloads Face
+Landmarker, SFace and OCR-B, and copies the MediaPipe, ONNX Runtime and
+Tesseract.js runtime files out of `node_modules`. When it finishes, it checks
+every file against `models.manifest.json`. On a first run, `minifasnetv2.onnx`
+shows as `MISSING` until you complete step 3.
+
+### 3. Export MiniFASNetV2 to ONNX (one time)
+
+Minivision publishes only PyTorch weights, so the passive liveness model needs
+a manual conversion:
+
+```bash
+git clone https://github.com/minivision-ai/Silent-Face-Anti-Spoofing /tmp/fas
+cd /tmp/fas
+python3 -m venv .venv && . .venv/bin/activate
+pip install torch onnx
+python - <<'EOF'
+import sys, torch
+sys.path.insert(0, ".")
+from src.model_lib.MiniFASNet import MiniFASNetV2
+m = MiniFASNetV2(conv6_kernel=(5, 5)); m.eval()
+sd = torch.load("resources/anti_spoof_models/2.7_80x80_MiniFASNetV2.pth", map_location="cpu")
+m.load_state_dict({k.replace("module.", "", 1): v for k, v in sd.items()})
+torch.onnx.export(m, torch.zeros(1, 3, 80, 80), "minifasnetv2.onnx",
+                  input_names=["input"], output_names=["output"], opset_version=11)
+EOF
+cp minifasnetv2.onnx <path-to-biocheck-sdk>/public/models/
+cd <path-to-biocheck-sdk>
+npm run models:pin      # records its size and SHA-256 in models.manifest.json
+npm run models:check    # every line should now say OK
+```
+
+Without this file, `verify` rejects with `model_load_failed` once the document
+step is done.
+
+### 4. Start the demo
+
+```bash
+npm run dev
+```
+
+The dev server opens <http://localhost:5173/demo/>. Click **Verificar
+identidad**, then:
+
+1. Choose **DNI** or **Pasaporte**.
+2. Photograph the back of the DNI (or the passport data page) inside the
+   frame, or upload an image of it with **Subir archivo**.
+3. For a DNI, photograph or upload the front.
+4. Follow the on-screen challenges (blink, turn your head, move closer).
+
+The demo prints the result (`Verificado` / `Rechazado` and the score) or the
+error code.
+
+The dev server sends the `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Embedder-Policy` headers, so the page is cross-origin isolated
+and ONNX Runtime runs multithreaded. You can check this in the console with
+`crossOriginIsolated`, which should be `true`.
+
+### Testing on a phone
+
+Browsers grant camera access only on `https://` or `localhost`, so opening
+`http://<your-ip>:5173` from a phone won't work. Serve the dev server over
+HTTPS, for example through a tunnel that forwards the COOP/COEP headers, or by
+adding `@vitejs/plugin-basic-ssl` and running `npx vite --host`.
+
+### Other commands
+
+```bash
+npm test                # unit tests (Vitest)
+npm run typecheck       # tsc --noEmit
+npm run build           # library in dist/, models in dist/models/<hash>/
+npm run models:check    # verify every model file against the manifest
+```
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| `Error: model_load_failed` | A model file is missing or its download failed. Run `npm run models:check`. |
+| `Error: camera_permission_denied` | Camera access was blocked. Allow it in the site settings and retry. |
+| `Error: camera_unavailable` | No camera was found, it is in use by another app, or it can't deliver 640 x 480 at 15 fps. |
+| `Error: browser_not_supported` | The browser lacks a required API: `requestVideoFrameCallback`, module workers or WebAssembly SIMD. |
+| `models:check` reports `MISMATCH` | A file changed after it was pinned. Re-download it, or run `npm run models:pin` if the update was intentional. |
 
 ## Privacy
 
-All processing happens locally in the browser. The SDK does not transmit biometric data, embeddings, or document images to any server. The `verify()` return value contains only a boolean and a similarity score.
+All processing happens locally. The SDK persists nothing (no localStorage or
+IndexedDB; Tesseract.js's IndexedDB cache is disabled) and the only network
+traffic is the download of the static model files.
 
 ## License
 
