@@ -21,8 +21,8 @@
       "src": "minifasnetv2.onnx",
       "version": "2.7_80x80-opset11",
       "source": "minivision-ai/Silent-Face-Anti-Spoofing 2.7_80x80_MiniFASNetV2.pth, exported to ONNX (scripts/download-models.sh)",
-      "size": null,
-      "sha256": null
+      "size": 1743495,
+      "sha256": "c531a9822211e96ebda68285d4ce8ee552b28be4b44edf7d9fe7700ab6063176"
     },
     {
       "id": "ocrb",

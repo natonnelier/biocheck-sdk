@@ -1,3 +1,4 @@
+import { BENCH, bench, storageSnapshot } from "./bench.js";
 import { resolveConfig } from "./config.js";
 import { BiocheckError } from "./errors.js";
 import { assertBrowserSupport } from "./modules/support.js";
@@ -35,10 +36,12 @@ export async function verify(
   try {
     return await orchestrator.run();
   } catch (e) {
+    bench("error", { code: e instanceof BiocheckError ? e.code : "internal_error", message: String(e) });
     if (e instanceof BiocheckError) throw e;
     throw new BiocheckError("internal_error", e instanceof Error ? e.message : String(e));
   } finally {
     await orchestrator.dispose();
     view.destroy();
+    if (BENCH) bench("storage", await storageSnapshot());
   }
 }

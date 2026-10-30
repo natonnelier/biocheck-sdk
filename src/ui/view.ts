@@ -4,11 +4,22 @@ import { challengeText, hintText, S } from "./strings.js";
 
 type StateMessage = Extract<FromWorker, { type: "state" }>;
 
+/** Content of a blocking step-transition screen. */
+export interface Notice {
+  tone: "success" | "error" | "info";
+  title: string;
+  body?: string;
+  items?: readonly string[];
+  footer?: string;
+  button: string;
+}
+
 const CSS = `
 :host { display: block; }
 .bc { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f2f2;
   background: #111; border-radius: 12px; padding: 12px; display: flex; flex-direction: column;
-  gap: 10px; max-width: 640px; margin: 0 auto; box-sizing: border-box; }
+  gap: 10px; max-width: 640px; margin: 0 auto; box-sizing: border-box; position: relative; }
+.bc.has-notice { min-height: 380px; }
 .stage { position: relative; width: 100%; overflow: hidden; border-radius: 8px; background: #000; }
 .stage[hidden] { display: none; }
 video { display: block; width: 100%; height: 100%; object-fit: fill; }
@@ -27,6 +38,26 @@ button { font: inherit; padding: 10px 18px; border: 0; border-radius: 8px; curso
   background: #2563eb; color: #fff; min-width: 120px; }
 button.secondary { background: #3f3f46; }
 button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+.notice { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center;
+  justify-content: center; padding: 16px; overflow: auto; border-radius: 12px;
+  background: rgba(17,17,17,.75); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.notice[hidden] { display: none; }
+.card { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 420px;
+  padding: 22px 20px; box-sizing: border-box; border-radius: 12px; background: #1c1c1f;
+  border: 1px solid #3f3f46; text-align: center; margin: auto; }
+.card .icon { width: 48px; height: 48px; margin: 0 auto; border-radius: 50%; display: grid;
+  place-items: center; font-size: 26px; font-weight: 700; color: #fff; }
+.card.success .icon { background: #16a34a; }
+.card.success .icon::before { content: "✓"; }
+.card.error .icon { background: #dc2626; }
+.card.error .icon::before { content: "!"; }
+.card.info .icon { background: #2563eb; }
+.card.info .icon::before { content: "i"; font-family: Georgia, serif; }
+.card h2 { margin: 0; font-size: 20px; }
+.card p { margin: 0; color: #d4d4d8; }
+.card ul { margin: 0; padding-left: 22px; text-align: left; color: #f2f2f2; }
+.card li + li { margin-top: 4px; }
+.card button { align-self: center; margin-top: 4px; }
 `;
 
 /** Guide frame of aspect `aspect`, centred, at most 90 % of each side. */
@@ -47,6 +78,8 @@ export function guideRect(
 /** The UI the SDK draws inside the client's container (thesis 3.3.1). */
 export class View {
   private readonly host: HTMLDivElement;
+  private readonly panel: HTMLDivElement;
+  private readonly noticeEl: HTMLDivElement;
   private readonly stage: HTMLDivElement;
   private readonly video: HTMLVideoElement;
   private readonly guide: HTMLDivElement;
@@ -71,8 +104,11 @@ export class View {
         <p class="progress"></p>
         <div class="actions"></div>
         <input type="file" accept="image/*" hidden>
+        <div class="notice" hidden></div>
       </div>`;
     const q = <T extends Element>(sel: string) => root.querySelector(sel) as T;
+    this.panel = q(".bc");
+    this.noticeEl = q(".notice");
     this.stage = q(".stage");
     this.video = q("video");
     this.guide = q(".guide");
@@ -103,6 +139,49 @@ export class View {
       const dni = this.button(S.dni, () => resolve("dni"));
       const passport = this.button(S.passport, () => resolve("passport"));
       this.actions.replaceChildren(dni, passport);
+    });
+  }
+
+  /**
+   * Blocking step-transition screen drawn over the whole UI (camera included);
+   * resolves when the user presses its button.
+   */
+  notice(n: Notice): Promise<void> {
+    this.busy("");
+    const card = document.createElement("div");
+    card.className = `card ${n.tone}`;
+    card.setAttribute("role", n.tone === "error" ? "alertdialog" : "dialog");
+    card.setAttribute("aria-modal", "true");
+    card.setAttribute("aria-label", n.title);
+    const icon = document.createElement("div");
+    icon.className = "icon";
+    icon.setAttribute("aria-hidden", "true");
+    const title = document.createElement("h2");
+    title.textContent = n.title;
+    card.append(icon, title);
+    if (n.body) card.append(this.paragraph(n.body));
+    if (n.items?.length) {
+      const ul = document.createElement("ul");
+      for (const text of n.items) {
+        const li = document.createElement("li");
+        li.textContent = text;
+        ul.append(li);
+      }
+      card.append(ul);
+    }
+    if (n.footer) card.append(this.paragraph(n.footer));
+    return new Promise((resolve) => {
+      const button = this.button(n.button, () => {
+        this.noticeEl.hidden = true;
+        this.noticeEl.replaceChildren();
+        this.panel.classList.remove("has-notice");
+        resolve();
+      });
+      card.append(button);
+      this.noticeEl.replaceChildren(card);
+      this.panel.classList.add("has-notice");
+      this.noticeEl.hidden = false;
+      button.focus();
     });
   }
 
@@ -208,6 +287,12 @@ export class View {
   destroy(): void {
     this.hideCamera();
     this.host.remove();
+  }
+
+  private paragraph(text: string): HTMLParagraphElement {
+    const p = document.createElement("p");
+    p.textContent = text;
+    return p;
   }
 
   private button(label: string, onClick: () => void, secondary = false): HTMLButtonElement {

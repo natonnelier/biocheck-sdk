@@ -1,4 +1,5 @@
 import { createWorker, OEM, PSM, type Worker as TesseractWorker } from "tesseract.js";
+import { bench, round } from "../bench.js";
 import { MRZ_WHITELIST } from "../config.js";
 import { BiocheckError } from "../errors.js";
 import type { DocumentType, ResolvedConfig } from "../types.js";
@@ -48,10 +49,20 @@ export class MrzReader {
 
   /** True when the image yields an MRZ of the right format with valid check digits. */
   async read(image: ImageBitmap, docType: DocumentType): Promise<boolean> {
+    const t0 = performance.now();
     const canvas = preprocessStrip(image, docType, this.doc);
     const { data } = await this.worker.recognize(canvas);
-    // Only validity leaves this function; the parsed fields are dropped here.
-    return parseMrz(data.text, docType) !== null;
+    // Only validity leaves this function; the parsed fields are dropped here
+    // (bench mode logs them for the per-field accuracy count).
+    const parsed = parseMrz(data.text, docType);
+    bench("mrz-read", {
+      docType,
+      image: `${image.width}x${image.height}`,
+      ms: round(performance.now() - t0, 1),
+      valid: parsed !== null,
+      fields: parsed?.fields ?? null,
+    });
+    return parsed !== null;
   }
 
   async terminate(): Promise<void> {

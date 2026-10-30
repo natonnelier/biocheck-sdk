@@ -25,7 +25,8 @@
     "test:watch": "vitest",
     "download-models": "bash scripts/download-models.sh",
     "models:check": "node scripts/models-manifest.mjs --check",
-    "models:pin": "node scripts/models-manifest.mjs --write"
+    "models:pin": "node scripts/models-manifest.mjs --write",
+    "models:sizes": "node scripts/models-manifest.mjs --sizes"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",

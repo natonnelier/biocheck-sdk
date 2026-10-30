@@ -1,5 +1,6 @@
 import * as ort from "onnxruntime-web";
 import { FaceLandmarker } from "@mediapipe/tasks-vision";
+import { bench, round } from "../bench.js";
 import { FACE_LANDMARKER, MINIFAS, SFACE } from "../config.js";
 import type { MediaPipeDelegate, OrtBackend, WorkerModelUrls } from "../protocol.js";
 
@@ -56,18 +57,34 @@ export async function loadOrtModels(urls: WorkerModelUrls): Promise<OrtModels> {
 
   const wasm = await create("wasm");
   const wasmMs = await timeWarmup(wasm);
-  if (!(await hasWebGpuAdapter())) return wasm;
+  const report = (chosen: OrtBackend, webgpu: string, webgpuMs: number | null) =>
+    bench("ort-backend", {
+      chosen,
+      wasmMs: round(wasmMs, 1),
+      webgpuMs: webgpuMs === null ? null : round(webgpuMs, 1),
+      webgpu,
+      numThreads: ort.env.wasm.numThreads,
+      crossOriginIsolated: self.crossOriginIsolated,
+    });
+  if (!(await hasWebGpuAdapter())) {
+    report("wasm", "no adapter", null);
+    return wasm;
+  }
 
   let gpu: OrtModels | null = null;
+  let gpuMs: number | null = null;
   try {
     gpu = await create("webgpu");
-    const gpuMs = await timeWarmup(gpu);
+    gpuMs = await timeWarmup(gpu);
     if (gpuMs < wasmMs) {
       await release(wasm);
+      report("webgpu", "faster", gpuMs);
       return gpu;
     }
-  } catch {
+    report("wasm", "slower", gpuMs);
+  } catch (e) {
     // WebGPU unusable for these models (e.g. unsupported INT8 ops): keep WASM.
+    report("wasm", `failed: ${e instanceof Error ? e.message : String(e)}`, gpuMs);
   }
   if (gpu) await release(gpu);
   return wasm;
@@ -129,6 +146,7 @@ export async function loadFaceLandmarker(
   const fileset = { wasmLoaderPath: urls.mediapipeLoader, wasmBinaryPath: urls.mediapipeBinary };
   const modelAssetBuffer = await fetchBytes(urls.faceLandmarker);
   let lastError: unknown;
+  const failures: Record<string, string> = {};
   for (const delegate of ["GPU", "CPU"] as const) {
     let landmarker: FaceLandmarker | null = null;
     try {
@@ -145,9 +163,11 @@ export async function loadFaceLandmarker(
       const blank = new OffscreenCanvas(64, 64);
       blank.getContext("2d")!.fillRect(0, 0, 64, 64);
       landmarker.detect(blank);
+      bench("mediapipe-delegate", { chosen: delegate, failures });
       return { landmarker, delegate };
     } catch (e) {
       lastError = e;
+      failures[delegate] = e instanceof Error ? e.message : String(e);
       landmarker?.close();
     }
   }

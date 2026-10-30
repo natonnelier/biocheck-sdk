@@ -1,3 +1,4 @@
+import { bench } from "../bench.js";
 import { BiocheckError } from "../errors.js";
 import type { ResolvedConfig } from "../types.js";
 
@@ -11,8 +12,9 @@ export async function openCamera(
   cam: ResolvedConfig["camera"],
   ideal: { width: number; height: number }
 ): Promise<MediaStream> {
+  let stream: MediaStream;
   try {
-    return await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         facingMode: { ideal: facing },
@@ -29,6 +31,19 @@ export async function openCamera(
     // NotFoundError, NotReadableError, OverconstrainedError, AbortError…
     throw new BiocheckError("camera_unavailable", `Camera unavailable: ${name || String(e)}`);
   }
+  const s = stream.getVideoTracks()[0]?.getSettings() ?? {};
+  bench("camera", {
+    facing,
+    width: s.width ?? null,
+    height: s.height ?? null,
+    frameRate: s.frameRate ?? null,
+    facingMode: s.facingMode ?? null,
+    meetsMinimum:
+      (s.width ?? 0) >= cam.minWidth &&
+      (s.height ?? 0) >= cam.minHeight &&
+      (s.frameRate ?? 0) >= cam.minFrameRate,
+  });
+  return stream;
 }
 
 export function stopCamera(stream: MediaStream | null): void {

@@ -13,6 +13,7 @@
  */
 import * as ort from "onnxruntime-web";
 import type { FaceLandmarker, FaceLandmarkerResult } from "@mediapipe/tasks-vision";
+import { BENCH, bench, round } from "../bench.js";
 import { FACE_LANDMARKER, MINIFAS, SFACE } from "../config.js";
 import { postToMain, type ToWorker, type WorkerConfig } from "../protocol.js";
 import { cosineSimilarity } from "../utils/math.js";
@@ -71,12 +72,18 @@ async function handle(msg: ToWorker): Promise<void> {
 
 async function init(cfg: WorkerConfig, msg: Extract<ToWorker, { type: "init" }>): Promise<void> {
   config = cfg;
+  const t0 = performance.now();
   const [mp, ortModels] = await Promise.all([
     loadFaceLandmarker(msg.urls, cfg.detection.minConfidence),
     loadOrtModels(msg.urls),
   ]);
   landmarker = mp.landmarker;
   models = ortModels;
+  bench("worker-ready", {
+    loadMs: round(performance.now() - t0, 1),
+    onnxruntime: ortModels.backend,
+    mediapipe: mp.delegate,
+  });
   postToMain({
     type: "ready",
     backends: { onnxruntime: ortModels.backend, mediapipe: mp.delegate },
@@ -87,12 +94,26 @@ async function init(cfg: WorkerConfig, msg: Extract<ToWorker, { type: "init" }>)
 async function documentPhoto(bitmap: ImageBitmap): Promise<void> {
   const { landmarker, models, config } = ready();
   let aligned: ImageData | null = null;
+  const t0 = performance.now();
+  // Bench: every detected face (box relative to the image) and the one picked.
+  const faces: Record<string, number>[] = [];
+  let chosen = -1;
+  const { width, height } = bitmap;
   try {
     const result = landmarker.detect(bitmap);
     let best: { landmarks: Landmark[]; box: Box } | null = null;
     for (const landmarks of result.faceLandmarks) {
       const box = faceBox(landmarks, bitmap.width, bitmap.height);
-      if (!best || box.width > best.box.width) best = { landmarks, box };
+      if (BENCH) {
+        faces.push({
+          x: round(box.x / width), y: round(box.y / height),
+          w: round(box.width / width), h: round(box.height / height), widthPx: Math.round(box.width),
+        });
+      }
+      if (!best || box.width > best.box.width) {
+        best = { landmarks, box };
+        chosen = faces.length - 1;
+      }
     }
     if (best && best.box.width >= config.photoMinWidth) aligned = alignFace(bitmap, best.landmarks);
   } finally {
@@ -100,6 +121,14 @@ async function documentPhoto(bitmap: ImageBitmap): Promise<void> {
   }
   // Computed right away: it does not depend on the liveness check.
   documentEmbedding = aligned ? await embed(models, aligned) : null;
+  bench("document-photo", {
+    image: `${width}x${height}`,
+    faces,
+    chosen,
+    minWidthPx: config.photoMinWidth,
+    valid: documentEmbedding !== null,
+    ms: round(performance.now() - t0, 1),
+  });
   postToMain({ type: "document-result", valid: documentEmbedding !== null });
 }
 
@@ -123,10 +152,27 @@ async function frame(bitmap: ImageBitmap, timestamp: number): Promise<void> {
     return;
   }
   let out: StepOutcome;
+  const t0 = performance.now();
   try {
     const result = landmarker.detectForVideo(bitmap, timestamp);
     const { observation, landmarks, box } = observe(result, bitmap.width, bitmap.height, timestamp);
     out = machine.step(observation);
+    if (BENCH) {
+      const o = observation;
+      bench("frame", {
+        ms: round(performance.now() - t0, 1),
+        faces: o.faceCount,
+        widthRatio: round(o.faceWidthRatio),
+        blink: round(o.blink),
+        yaw: round(o.yaw, 1),
+        pitch: round(o.pitch, 1),
+        perspective: round(o.perspective),
+        status: out.status,
+        challenge: out.challenge ? `${out.challenge.kind}${out.challenge.side ? `:${out.challenge.side}` : ""}` : null,
+        challengeIndex: out.challengeIndex,
+        hint: out.hint ?? null,
+      });
+    }
     if (out.reset) {
       passiveCrops = [];
       selfie = null;
@@ -152,6 +198,11 @@ async function frame(bitmap: ImageBitmap, timestamp: number): Promise<void> {
   }
 
   finished = true;
+  bench("liveness-end", {
+    status: out.status,
+    challengeIndex: out.challengeIndex,
+    challengeTotal: out.challengeTotal,
+  });
   postToMain({ type: "state", state: "processing" });
   postToMain(
     out.status === "passed" ? await decide(models, config) : { type: "result", accepted: false }
@@ -167,14 +218,38 @@ async function decide(
   config: WorkerConfig
 ): Promise<{ type: "result"; accepted: boolean; score?: number }> {
   if (passiveCrops.length < config.liveness.passiveFrames || !selfie || !documentEmbedding) {
+    bench("decision", {
+      stage: "missing input",
+      passiveCrops: passiveCrops.length,
+      selfie: selfie !== null,
+      documentEmbedding: documentEmbedding !== null,
+    });
     return { type: "result", accepted: false };
   }
   let sum = 0;
-  for (const crop of passiveCrops) sum += await passiveScore(models, crop);
-  if (sum / passiveCrops.length < config.liveness.passiveThreshold) {
+  const scores: number[] = [];
+  for (const crop of passiveCrops) {
+    const s = await passiveScore(models, crop);
+    sum += s;
+    if (BENCH) scores.push(round(s, 4));
+  }
+  const passive = sum / passiveCrops.length;
+  bench("passive", {
+    scores,
+    mean: round(passive, 4),
+    threshold: config.liveness.passiveThreshold,
+    passed: passive >= config.liveness.passiveThreshold,
+  });
+  if (passive < config.liveness.passiveThreshold) {
     return { type: "result", accepted: false };
   }
   const score = cosineSimilarity(documentEmbedding, await embed(models, selfie));
+  bench("decision", {
+    stage: "comparison",
+    similarity: round(score, 4),
+    threshold: config.decision.threshold,
+    accepted: score >= config.decision.threshold,
+  });
   return { type: "result", accepted: score >= config.decision.threshold, score };
 }
 
